@@ -1,24 +1,3 @@
-/*
- * Copyright (c) 2021 Freya Arbjerg and contributors
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
 package lavalink.server.player
 
 import com.sedmelluq.discord.lavaplayer.format.StandardAudioDataFormats
@@ -49,10 +28,12 @@ class LavalinkPlayer(
     audioPlayerManager: AudioPlayerManager,
     pluginInfoModifiers: List<AudioPluginInfoModifier>
 ) : AudioEventAdapter(), IPlayer {
-    private val buffer = ByteBuffer.allocate(StandardAudioDataFormats.DISCORD_OPUS.maximumChunkSize())
-    private val mutableFrame = MutableAudioFrame().apply { setBuffer(buffer) }
 
-    val audioLossCounter = AudioLossCounter()
+    private val buffer: ByteBuffer = ByteBuffer.allocate(StandardAudioDataFormats.DISCORD_OPUS.maximumChunkSize())
+    private val mutableFrame: MutableAudioFrame = MutableAudioFrame().apply { setBuffer(buffer) }
+    private val audioLossCounter = AudioLossCounter()
+    private var updateFuture: ScheduledFuture<*>? = null
+
     var endMarkerHit = false
     var filters: FilterChain = FilterChain()
         set(value) {
@@ -60,13 +41,11 @@ class LavalinkPlayer(
             field = value
         }
 
-    override val audioPlayer: AudioPlayer = audioPlayerManager.createPlayer().also {
-        it.addListener(this)
-        it.addListener(EventEmitter(audioPlayerManager, this, pluginInfoModifiers))
-        it.addListener(audioLossCounter)
+    override val audioPlayer: AudioPlayer = audioPlayerManager.createPlayer().apply {
+        addListener(this@LavalinkPlayer)
+        addListener(EventEmitter(audioPlayerManager, this@LavalinkPlayer, pluginInfoModifiers))
+        addListener(audioLossCounter)
     }
-
-    private var updateFuture: ScheduledFuture<*>? = null
 
     override val isPlaying: Boolean
         get() = audioPlayer.playingTrack != null && !audioPlayer.isPaused
@@ -76,12 +55,12 @@ class LavalinkPlayer(
 
     fun destroy() {
         audioPlayer.destroy()
+        updateFuture?.cancel(false)
     }
 
     fun provideTo(connection: MediaConnection) {
         connection.audioSender = Provider(connection)
     }
-
 
     override fun play(track: AudioTrack) {
         audioPlayer.playTrack(track)
@@ -97,7 +76,7 @@ class LavalinkPlayer(
     }
 
     override fun seekTo(position: Long) {
-        val track = audioPlayer.playingTrack ?: throw RuntimeException("Can't seek when not playing anything")
+        val track = audioPlayer.playingTrack ?: throw IllegalStateException("Can't seek when not playing anything")
         track.position = position
     }
 
@@ -106,13 +85,11 @@ class LavalinkPlayer(
     }
 
     override fun onTrackEnd(player: AudioPlayer, track: AudioTrack, endReason: AudioTrackEndReason) {
-        updateFuture!!.cancel(false)
+        updateFuture?.cancel(false)
     }
 
     override fun onTrackStart(player: AudioPlayer, track: AudioTrack) {
-        if (updateFuture?.isCancelled == false) {
-            return
-        }
+        if (updateFuture?.isCancelled == false) return
 
         updateFuture = socketContext.playerUpdateService.scheduleAtFixedRate(
             { sendPlayerUpdate(socketContext, this) },
@@ -123,10 +100,12 @@ class LavalinkPlayer(
     }
 
     private inner class Provider(connection: MediaConnection?) : OpusAudioFrameProvider(connection) {
-        override fun canProvide() = audioPlayer.provide(mutableFrame).also { provided ->
+        override fun canProvide(): Boolean {
+            val provided = audioPlayer.provide(mutableFrame)
             if (!provided) {
                 audioLossCounter.onLoss()
             }
+            return provided
         }
 
         override fun retrieveOpusFrame(buf: ByteBuf) {
