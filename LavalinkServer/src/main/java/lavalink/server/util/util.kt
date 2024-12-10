@@ -1,24 +1,3 @@
-/*
- * Copyright (c) 2021 Freya Arbjerg and contributors
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
 package lavalink.server.util
 
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager
@@ -40,7 +19,6 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.util.*
 
-
 fun AudioTrack.toTrack(
     audioPlayerManager: AudioPlayerManager,
     pluginInfoModifiers: List<AudioPluginInfoModifier>
@@ -49,15 +27,13 @@ fun AudioTrack.toTrack(
 }
 
 fun AudioTrack.toTrack(encoded: String, pluginInfoModifiers: List<AudioPluginInfoModifier>): Track {
-    val pluginInfo = pluginInfoModifiers.fold(JsonObject(emptyMap())) { acc, it ->
-        val jsonObject = it.modifyAudioTrackPluginInfo(this) ?: JsonObject(emptyMap())
-        acc + jsonObject
+    val pluginInfo = pluginInfoModifiers.fold(JsonObject(emptyMap())) { acc, modifier ->
+        acc + (modifier.modifyAudioTrackPluginInfo(this) ?: JsonObject(emptyMap()))
     }
-
     return Track(encoded, this.toInfo(), pluginInfo, this.userData as? JsonObject ?: JsonObject(emptyMap()))
 }
 
-private operator fun JsonObject.plus(other: JsonObject) = JsonObject(toMap() + other.toMap())
+private operator fun JsonObject.plus(other: JsonObject) = JsonObject(this.toMap() + other.toMap())
 
 fun AudioTrack.toInfo(): TrackInfo {
     return TrackInfo(
@@ -76,22 +52,18 @@ fun AudioTrack.toInfo(): TrackInfo {
 }
 
 fun AudioPlaylist.toPlaylistInfo(): PlaylistInfo {
-    return PlaylistInfo(this.name, if (this.selectedTrack == null) -1 else this.tracks.indexOf(this.selectedTrack))
+    return PlaylistInfo(this.name, this.selectedTrack?.let { this.tracks.indexOf(it) } ?: -1)
 }
 
-
 fun AudioPlaylist.toPluginInfo(pluginInfoModifiers: List<AudioPluginInfoModifier>): JsonObject {
-    val pluginInfo = pluginInfoModifiers.fold(JsonObject(emptyMap())) { acc, it ->
-        val jsonObject = it.modifyAudioPlaylistPluginInfo(this) ?: JsonObject(emptyMap())
-        acc + jsonObject
+    return pluginInfoModifiers.fold(JsonObject(emptyMap())) { acc, modifier ->
+        acc + (modifier.modifyAudioPlaylistPluginInfo(this) ?: JsonObject(emptyMap()))
     }
-    return pluginInfo
 }
 
 fun LavalinkPlayer.toPlayer(context: SocketContext, pluginInfoModifiers: List<AudioPluginInfoModifier>): Player {
     val connection = context.getMediaConnection(this).gatewayConnection
     val voiceServerInfo = context.koe.getConnection(guildId)?.voiceServerInfo
-
     return Player(
         guildId.toString(),
         track?.toTrack(context.audioPlayerManager, pluginInfoModifiers),
@@ -112,31 +84,33 @@ fun LavalinkPlayer.toPlayer(context: SocketContext, pluginInfoModifiers: List<Au
     )
 }
 
-
 fun getRootCause(throwable: Throwable?): Throwable {
     var rootCause = throwable
-    while (rootCause!!.cause != null) {
+    while (rootCause?.cause != null) {
         rootCause = rootCause.cause
     }
-    return rootCause
+    return rootCause ?: throwable ?: Exception("Unknown error")
 }
 
-fun socketContext(socketServer: SocketServer, sessionId: String) =
+fun socketContext(socketServer: SocketServer, sessionId: String): SocketContext =
     socketServer.sessions[sessionId] ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found")
 
-fun existingPlayer(socketContext: SocketContext, guildId: Long) =
+fun existingPlayer(socketContext: SocketContext, guildId: Long): LavalinkPlayer =
     socketContext.players[guildId] ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Player not found")
 
 fun decodeTrack(audioPlayerManager: AudioPlayerManager, message: String): AudioTrack {
-    val bais = ByteArrayInputStream(Base64.getDecoder().decode(message))
-    return audioPlayerManager.decodeTrack(MessageInput(bais)).decodedTrack
-        ?: throw IllegalStateException("Failed to decode track due to a mismatching version or missing source manager")
+    val decodedBytes = Base64.getDecoder().decode(message)
+    ByteArrayInputStream(decodedBytes).use { bais ->
+        return audioPlayerManager.decodeTrack(MessageInput(bais)).decodedTrack
+            ?: throw IllegalStateException("Failed to decode track due to a mismatching version or missing source manager")
+    }
 }
 
 fun encodeTrack(audioPlayerManager: AudioPlayerManager, track: AudioTrack): String {
-    val baos = ByteArrayOutputStream()
-    audioPlayerManager.encodeTrack(MessageOutput(baos), track)
-    return Base64.getEncoder().encodeToString(baos.toByteArray())
+    ByteArrayOutputStream().use { baos ->
+        audioPlayerManager.encodeTrack(MessageOutput(baos), track)
+        return Base64.getEncoder().encodeToString(baos.toByteArray())
+    }
 }
 
 fun Exception.Severity.Companion.fromFriendlyException(e: FriendlyException.Severity) = when (e) {
