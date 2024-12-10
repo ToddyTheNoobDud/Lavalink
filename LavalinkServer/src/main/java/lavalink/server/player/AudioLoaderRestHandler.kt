@@ -1,24 +1,3 @@
-/*
- * Copyright (c) 2021 Freya Arbjerg and contributors
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
 package lavalink.server.player
 
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager
@@ -31,7 +10,10 @@ import dev.arbjerg.lavalink.protocol.v4.LoadResult
 import dev.arbjerg.lavalink.protocol.v4.Track
 import dev.arbjerg.lavalink.protocol.v4.Tracks
 import jakarta.servlet.http.HttpServletRequest
-import lavalink.server.util.*
+import lavalink.server.util.decodeTrack
+import lavalink.server.util.toPlaylistInfo
+import lavalink.server.util.toPluginInfo
+import lavalink.server.util.toTrack
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
@@ -43,7 +25,6 @@ class AudioLoaderRestHandler(
     private val audioPlayerManager: AudioPlayerManager,
     private val pluginInfoModifiers: List<AudioPluginInfoModifier>
 ) {
-
     companion object {
         private val log = LoggerFactory.getLogger(AudioLoaderRestHandler::class.java)
     }
@@ -53,44 +34,36 @@ class AudioLoaderRestHandler(
         request: HttpServletRequest,
         @RequestParam identifier: String
     ): ResponseEntity<LoadResult> {
-        log.info("Got request to load for identifier \"${identifier}\"")
+        log.info("Received request to load for identifier: \"$identifier\"")
 
         val item = try {
             loadAudioItem(audioPlayerManager, identifier)
         } catch (ex: FriendlyException) {
-            log.error("Failed to load track", ex)
+            log.error("Failed to load track for identifier: \"$identifier\"", ex)
             return ResponseEntity.ok(LoadResult.loadFailed(ex))
         }
 
-        val result = when (item) {
-            null -> LoadResult.NoMatches()
-
+        return when (item) {
+            null -> ResponseEntity.ok(LoadResult.NoMatches())
             is AudioTrack -> {
-                log.info("Loaded track ${item.info.title}")
-                LoadResult.trackLoaded(item.toTrack(audioPlayerManager, pluginInfoModifiers))
+                log.info("Loaded track: ${item.info.title}")
+                ResponseEntity.ok(LoadResult.trackLoaded(item.toTrack(audioPlayerManager, pluginInfoModifiers)))
             }
-
             is AudioPlaylist -> {
-                log.info("Loaded playlist ${item.name}")
-
+                log.info("Loaded playlist: ${item.name}")
                 val tracks = item.tracks.map { it.toTrack(audioPlayerManager, pluginInfoModifiers) }
                 if (item.isSearchResult) {
-                    LoadResult.searchResult(tracks)
+                    ResponseEntity.ok(LoadResult.searchResult(tracks))
                 } else {
-                    LoadResult.playlistLoaded(item.toPlaylistInfo(), item.toPluginInfo(pluginInfoModifiers), tracks)
+                    ResponseEntity.ok(LoadResult.playlistLoaded(item.toPlaylistInfo(), item.toPluginInfo(pluginInfoModifiers), tracks))
                 }
             }
-
             else -> {
-                log.error("Unknown item type: ${item.javaClass}")
-                throw ResponseStatusException(
-                    HttpStatus.INTERNAL_SERVER_ERROR,
-                    "Identifier returned unknown audio item type: ${item.javaClass.canonicalName}"
-                )
+                val errorMessage = "Unknown item type: ${item.javaClass.canonicalName}"
+                log.error(errorMessage)
+                throw ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, errorMessage)
             }
         }
-
-        return ResponseEntity.ok(result)
     }
 
     @GetMapping("/v4/decodetrack")
@@ -99,12 +72,9 @@ class AudioLoaderRestHandler(
             HttpStatus.BAD_REQUEST,
             "No track to decode provided"
         )
-        return ResponseEntity.ok(
-            decodeTrack(audioPlayerManager, trackToDecode).toTrack(
-                trackToDecode,
-                pluginInfoModifiers
-            )
-        )
+        
+        val decodedTrack = decodeTrack(audioPlayerManager, trackToDecode).toTrack(trackToDecode, pluginInfoModifiers)
+        return ResponseEntity.ok(decodedTrack)
     }
 
     @PostMapping("/v4/decodetracks")
@@ -112,8 +82,8 @@ class AudioLoaderRestHandler(
         if (encodedTracks.tracks.isEmpty()) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "No tracks to decode provided")
         }
-        return ResponseEntity.ok(Tracks(encodedTracks.tracks.map {
-            decodeTrack(audioPlayerManager, it).toTrack(it, pluginInfoModifiers)
-        }))
+
+        val decodedTracks = encodedTracks.tracks.map { decodeTrack(audioPlayerManager, it).toTrack(it, pluginInfoModifiers) }
+        return ResponseEntity.ok(Tracks(decodedTracks))
     }
 }
